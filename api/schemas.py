@@ -17,3 +17,11 @@ class MonthlyRevenueOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ScreeningRequest(BaseModel):
+    min_gross_margin: float | None = None
+    min_roi: float | None = None
+    min_revenue_yoy: float | None = None
+    max_share_capital: float | None = None
+    industry: str | None = None
