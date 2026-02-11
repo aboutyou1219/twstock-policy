@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-space), ui-sans-serif, system-ui, sans-serif;
+  background: radial-gradient(circle at top, #1a1c2f 0%, #0e0f1a 60%, #0b0b12 100%);
+  color: #f7f6f2;
+}
+
+.grid-noise {
+  background-image: linear-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
