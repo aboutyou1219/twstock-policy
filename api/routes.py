@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.exc import SQLAlchemyError
+import twstock
 
 from .db import get_db
 from .models import (
@@ -17,7 +18,12 @@ from .models import (
     MonthlyRevenue,
     EtlRun,
 )
-from .schemas import MonthlyRevenueOut, ScreeningRequest
+from .schemas import (
+    MonthlyRevenueOut,
+    ScreenMetadataOut,
+    ScreenResponseOut,
+    ScreeningRequest,
+)
 
 router = APIRouter()
 
@@ -36,49 +42,39 @@ def monthly_revenue(ticker: str, db: Session = Depends(get_db)):
 def screen_companies(
     req: ScreeningRequest,
     db: Session = Depends(get_db),
-    sort_by: str = "roi",
+    sort_by: str = "gross_margin",
     sort_dir: str = "desc",
     limit: int = 50,
     offset: int = 0,
-):
+) -> ScreenResponseOut:
     try:
-        indicators_subq = (
+        latest_income_subq = (
             select(
-                IndicatorQuarter,
+                IncomeStatementQuarter.ticker.label("ticker"),
+                IncomeStatementQuarter.fiscal_year.label("fiscal_year"),
+                IncomeStatementQuarter.fiscal_quarter.label("fiscal_quarter"),
+                IncomeStatementQuarter.revenue.label("revenue"),
+                IncomeStatementQuarter.gross_profit.label("gross_profit"),
+                IncomeStatementQuarter.operating_income.label("operating_income"),
                 func.row_number()
                 .over(
-                    partition_by=IndicatorQuarter.company_id,
+                    partition_by=IncomeStatementQuarter.ticker,
                     order_by=(
-                        IndicatorQuarter.fiscal_year.desc(),
-                        IndicatorQuarter.fiscal_quarter.desc(),
+                        IncomeStatementQuarter.fiscal_year.desc(),
+                        IncomeStatementQuarter.fiscal_quarter.desc(),
                     ),
                 )
                 .label("rn"),
             )
             .subquery()
         )
-        indicators_latest = aliased(IndicatorQuarter, indicators_subq)
-
-        financials_subq = (
-            select(
-                FinancialQuarter,
-                func.row_number()
-                .over(
-                    partition_by=FinancialQuarter.company_id,
-                    order_by=(
-                        FinancialQuarter.fiscal_year.desc(),
-                        FinancialQuarter.fiscal_quarter.desc(),
-                    ),
-                )
-                .label("rn"),
-            )
-            .subquery()
-        )
-        financials_latest = aliased(FinancialQuarter, financials_subq)
+        prior_income = aliased(IncomeStatementQuarter)
 
         revenue_subq = (
             select(
-                MonthlyRevenue,
+                MonthlyRevenue.ticker.label("ticker"),
+                MonthlyRevenue.period.label("period"),
+                MonthlyRevenue.month_yoy_pct.label("month_yoy_pct"),
                 func.row_number()
                 .over(
                     partition_by=MonthlyRevenue.ticker,
@@ -88,54 +84,93 @@ def screen_companies(
             )
             .subquery()
         )
-        revenue_latest = aliased(MonthlyRevenue, revenue_subq)
+
+        eps_subq = (
+            select(
+                EpsQuarter.ticker.label("ticker"),
+                EpsQuarter.eps.label("eps"),
+                EpsQuarter.fiscal_year.label("fiscal_year"),
+                EpsQuarter.fiscal_quarter.label("fiscal_quarter"),
+                func.row_number()
+                .over(
+                    partition_by=EpsQuarter.ticker,
+                    order_by=(EpsQuarter.fiscal_year.desc(), EpsQuarter.fiscal_quarter.desc()),
+                )
+                .label("rn"),
+            )
+            .subquery()
+        )
+
+        gross_margin_expr = (
+            latest_income_subq.c.gross_profit * 100.0 / func.nullif(latest_income_subq.c.revenue, 0)
+        ).label("gross_margin")
+        operating_margin_expr = (
+            latest_income_subq.c.operating_income * 100.0 / func.nullif(latest_income_subq.c.revenue, 0)
+        ).label("operating_margin")
+        prior_gross_margin_expr = (
+            prior_income.gross_profit * 100.0 / func.nullif(prior_income.revenue, 0)
+        )
+        gross_margin_yoy_delta = (
+            gross_margin_expr - prior_gross_margin_expr
+        ).label("gross_margin_yoy_delta")
+        latest_quarter = (
+            func.concat(
+                latest_income_subq.c.fiscal_year,
+                " Q",
+                latest_income_subq.c.fiscal_quarter,
+            )
+        ).label("latest_quarter")
 
         query = (
             select(
-                Company.ticker,
-                Company.name,
-                Company.industry,
-                indicators_latest.gross_margin,
-                indicators_latest.roi,
-                indicators_latest.operating_margin,
-                financials_latest.share_capital,
-                revenue_latest.month_yoy_pct,
-                revenue_latest.period.label("latest_month"),
+                latest_income_subq.c.ticker,
+                gross_margin_expr,
+                operating_margin_expr,
+                revenue_subq.c.month_yoy_pct,
+                revenue_subq.c.period.label("latest_month"),
+                eps_subq.c.eps,
+                gross_margin_yoy_delta,
+                latest_quarter,
             )
-            .join(
-                indicators_subq,
-                (indicators_subq.c.company_id == Company.id) & (indicators_subq.c.rn == 1),
-            )
-            .join(
-                revenue_subq,
-                (revenue_subq.c.ticker == Company.ticker) & (revenue_subq.c.rn == 1),
+            .select_from(latest_income_subq)
+            .outerjoin(
+                prior_income,
+                and_(
+                    prior_income.ticker == latest_income_subq.c.ticker,
+                    prior_income.fiscal_year == latest_income_subq.c.fiscal_year - 1,
+                    prior_income.fiscal_quarter == latest_income_subq.c.fiscal_quarter,
+                ),
             )
             .outerjoin(
-                financials_subq,
-                (financials_subq.c.company_id == Company.id) & (financials_subq.c.rn == 1),
+                revenue_subq,
+                (revenue_subq.c.ticker == latest_income_subq.c.ticker) & (revenue_subq.c.rn == 1),
             )
+            .outerjoin(
+                eps_subq,
+                (eps_subq.c.ticker == latest_income_subq.c.ticker) & (eps_subq.c.rn == 1),
+            )
+            .where(latest_income_subq.c.rn == 1)
         )
 
         if req.min_gross_margin is not None:
-            query = query.where(indicators_latest.gross_margin >= req.min_gross_margin)
-        if req.min_roi is not None:
-            query = query.where(indicators_latest.roi >= req.min_roi)
+            query = query.where(gross_margin_expr >= req.min_gross_margin)
+        if req.min_operating_margin is not None:
+            query = query.where(operating_margin_expr >= req.min_operating_margin)
         if req.min_revenue_yoy is not None:
-            query = query.where(revenue_latest.month_yoy_pct >= req.min_revenue_yoy)
-        if req.max_share_capital is not None:
-            max_capital = req.max_share_capital * 1_000_000_000
-            query = query.where(financials_latest.share_capital <= max_capital)
-        if req.industry is not None:
-            query = query.where(Company.industry == req.industry)
+            query = query.where(revenue_subq.c.month_yoy_pct >= req.min_revenue_yoy)
+        if req.min_eps is not None:
+            query = query.where(eps_subq.c.eps >= req.min_eps)
+        if req.min_gross_margin_yoy_delta is not None:
+            query = query.where(gross_margin_yoy_delta >= req.min_gross_margin_yoy_delta)
 
         sort_map = {
-            "gross_margin": indicators_latest.gross_margin,
-            "roi": indicators_latest.roi,
-            "operating_margin": indicators_latest.operating_margin,
-            "revenue_yoy": revenue_latest.month_yoy_pct,
-            "share_capital": financials_latest.share_capital,
+            "gross_margin": gross_margin_expr,
+            "operating_margin": operating_margin_expr,
+            "revenue_yoy": revenue_subq.c.month_yoy_pct,
+            "eps": eps_subq.c.eps,
+            "gross_margin_yoy_delta": gross_margin_yoy_delta,
         }
-        sort_col = sort_map.get(sort_by, indicators_latest.roi)
+        sort_col = sort_map.get(sort_by, gross_margin_expr)
         if sort_dir.lower() == "asc":
             query = query.order_by(sort_col.asc().nullslast())
         else:
@@ -145,23 +180,31 @@ def screen_companies(
         rows = db.execute(query).all()
         results = []
         for row in rows:
+            info = twstock.codes.get(row.ticker)
+            industry = info.group if info is not None and getattr(info, "group", None) else None
+            if req.industry and industry != req.industry:
+                continue
             results.append(
                 {
                     "ticker": row.ticker,
-                    "name": row.name,
-                    "industry": row.industry,
-                    "gross_margin": row.gross_margin,
-                    "roi": row.roi,
-                    "operating_margin": row.operating_margin,
-                    "revenue_yoy": row.month_yoy_pct,
-                    "share_capital_billion": (
-                        row.share_capital / 1_000_000_000 if row.share_capital is not None else None
-                    ),
+                    "name": info.name if info is not None else row.ticker,
+                    "industry": industry,
                     "latest_month": row.latest_month,
+                    "latest_quarter": row.latest_quarter,
+                    "metrics": {
+                        "gross_margin": row.gross_margin,
+                        "operating_margin": row.operating_margin,
+                        "revenue_yoy": row.month_yoy_pct,
+                        "eps": row.eps,
+                        "gross_margin_yoy_delta": row.gross_margin_yoy_delta,
+                        "roi": None,
+                        "share_capital_billion": None,
+                    },
                 }
             )
         return {
             "count": len(results),
+            "total": len(results),
             "limit": limit,
             "offset": offset,
             "items": results,
@@ -170,13 +213,59 @@ def screen_companies(
         raise HTTPException(status_code=500, detail="Database error")
 
 
+@router.get("/v1/screens/metadata", response_model=ScreenMetadataOut)
+def screen_metadata(db: Session = Depends(get_db)):
+    try:
+        industries = sorted(
+            {
+                info.group
+                for code, info in twstock.codes.items()
+                if code.isdigit()
+                and len(code) == 4
+                and info.type == "股票"
+                and info.market in ["上市", "上櫃"]
+                and getattr(info, "group", None)
+            }
+        )
+
+        latest_month = db.execute(select(func.max(MonthlyRevenue.period))).scalar_one_or_none()
+        latest_income_row = db.execute(
+            select(IncomeStatementQuarter.fiscal_year, IncomeStatementQuarter.fiscal_quarter)
+            .order_by(
+                IncomeStatementQuarter.fiscal_year.desc(),
+                IncomeStatementQuarter.fiscal_quarter.desc(),
+            )
+            .limit(1)
+        ).first()
+
+        latest_quarter = None
+        if latest_income_row is not None:
+            latest_quarter = f"{latest_income_row.fiscal_year} Q{latest_income_row.fiscal_quarter}"
+
+        return {
+            "industries": industries,
+            "default_filters": {
+                "min_gross_margin": 30,
+                "min_operating_margin": 15,
+                "min_roi": None,
+                "min_revenue_yoy": None,
+                "min_eps": 2,
+                "min_gross_margin_yoy_delta": 5,
+                "max_share_capital": None,
+                "industry": None,
+            },
+            "data_as_of": {
+                "latest_month": latest_month.isoformat() if latest_month is not None else None,
+                "latest_quarter": latest_quarter,
+            },
+        }
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database error")
+
+
 @router.get("/v1/stocks/{ticker}/diagnostics")
 def stock_diagnostics(ticker: str, db: Session = Depends(get_db)):
     try:
-        company = db.execute(select(Company).where(Company.ticker == ticker)).scalar_one_or_none()
-        if company is None:
-            raise HTTPException(status_code=404, detail="ticker not found")
-
         max_years = []
         for model in (IncomeStatementQuarter, BalanceSheetQuarter, CashFlowQuarter, EpsQuarter):
             max_year = db.execute(
@@ -218,12 +307,18 @@ def stock_diagnostics(ticker: str, db: Session = Depends(get_db)):
         )
         monthly_rows = list(reversed(monthly_rows))
 
+        if not max_years and not monthly_rows:
+            raise HTTPException(status_code=404, detail="ticker not found")
+
+        company = db.execute(select(Company).where(Company.ticker == ticker)).scalar_one_or_none()
+        info = twstock.codes.get(ticker)
+
         return {
             "basic": {
-                "ticker": company.ticker,
-                "name": company.name,
-                "market": company.market,
-                "industry": company.industry,
+                "ticker": ticker,
+                "name": company.name if company is not None else (info.name if info is not None else ticker),
+                "market": company.market if company is not None else (info.market if info is not None else None),
+                "industry": company.industry if company is not None else (info.group if info is not None else None),
             },
             "quarterly": {
                 "income_statement": quarterly["income_statement"],
