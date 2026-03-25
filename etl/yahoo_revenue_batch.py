@@ -5,12 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable
 
-import twstock
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from api.db import SessionLocal
 from api.models import EtlRun
+from etl.ticker_universe import load_ticker_universe
 from etl.yahoo_revenue import fetch_yahoo_monthly_revenue, upsert_yahoo_monthly_revenue
 
 
@@ -62,15 +62,7 @@ def _finish_run(db: Session, run_id: int, stats: BatchStats) -> None:
 
 
 def _all_tickers() -> list[str]:
-    tickers = [
-        code
-        for code, info in twstock.codes.items()
-        if info.type == "股票"
-        and info.market in ["上市", "上櫃"]
-        and code.isdigit()
-        and len(code) == 4
-    ]
-    return sorted(tickers, key=int)
+    return load_ticker_universe()
 
 
 def _db_top5(db: Session, ticker: str) -> list[tuple]:
@@ -148,12 +140,18 @@ def top5_crawl(
     pending = 0
     for ticker in tickers:
         try:
-            rows = cache.get(ticker) or fetch_yahoo_monthly_revenue(ticker)
+            rows = cache.get(ticker)
+            used_cache = rows is not None
+            if rows is None:
+                rows = fetch_yahoo_monthly_revenue(ticker)
         except Exception as exc:
             stats.errors += 1
             print(f"[warn] fetch failed for {ticker}: {exc}")
             rows = []
-        stats.fetched_rows += len(rows)
+            used_cache = False
+        if not used_cache:
+            stats.fetched_rows += len(rows)
+            stats.processed += 1
         top5 = rows[:5]
         if not top5:
             continue
@@ -208,10 +206,6 @@ def run_single(ticker: str, run_top5: bool) -> BatchStats:
 
 
 if __name__ == "__main__":
-    try:
-        twstock.__update_codes()
-    except Exception as exc:
-        print(f"[warn] update codes skipped: {exc}")
     parser = argparse.ArgumentParser(description="Yahoo revenue batch crawler")
     parser.add_argument("--all", action="store_true", help="crawl all monthly revenue")
     parser.add_argument("--top5", action="store_true", help="crawl top5 monthly revenue only")
@@ -224,8 +218,15 @@ if __name__ == "__main__":
     if args.ticker:
         run_single(args.ticker, args.top5)
     elif args.all:
-        for ticker in _all_tickers():
-            run_single(ticker, args.top5)
+        print("starting yahoo revenue batch...")
+        stats = run(True, args.top5)
+        print("--- Yahoo Revenue Batch Report ---")
+        print(f"tickers_processed={stats.processed}")
+        print(f"rows_fetched={stats.fetched_rows}")
+        print(f"rows_inserted={stats.inserted_rows}")
+        print(f"top5_updated={stats.top5_updated}")
+        print(f"top5_skipped={stats.top5_skipped}")
+        print(f"errors={stats.errors}")
     else:
         print("starting yahoo revenue batch...")
         stats = run(False, True)

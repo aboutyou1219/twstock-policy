@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Iterable
 
 import requests
+import twstock
 from bs4 import BeautifulSoup
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from api.models import MonthlyRevenue
 from .http import get_text
+from .ticker_universe import load_ticker_universe
+from .yahoo_symbols import yahoo_quote_symbols
 
 YAHOO_REVENUE_URL = "https://tw.stock.yahoo.com/quote/{ticker}/revenue"
+PERIOD_PATTERN = re.compile(r"^\d{4}/\d{1,2}$")
 
 
 def _parse_number(value: str | None) -> float | None:
@@ -40,32 +45,53 @@ def _parse_period(value: str) -> date | None:
 
 def _extract_row_cells(row) -> tuple[str | None, list[str]]:
     period_text = None
-    period_cell = row.select_one("div.W\\(65px\\)")
-    if period_cell:
-        period_text = period_cell.get_text(strip=True)
 
     cells: list[str] = []
-    for span in row.select("span"):
-        text = span.get_text(strip=True)
+    for text in row.stripped_strings:
         if text:
+            if period_text is None and PERIOD_PATTERN.fullmatch(text):
+                period_text = text
+                continue
             cells.append(text)
     return period_text, cells
 
 
 def fetch_yahoo_monthly_revenue(ticker: str) -> list[dict]:
-    try:
-        html = get_text(YAHOO_REVENUE_URL.format(ticker=ticker), timeout=30)
-    except requests.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code in (404, 429):
-            if exc.response.status_code == 404:
-                print(f"[warn] yahoo revenue not found for {ticker}")
-            else:
-                print(f"[warn] yahoo revenue rate limited for {ticker}")
+    html = None
+    last_http_error: requests.HTTPError | None = None
+    last_request_error: requests.RequestException | None = None
+    tried_symbols = yahoo_quote_symbols(ticker)
+
+    for yahoo_ticker in tried_symbols:
+        try:
+            html = get_text(YAHOO_REVENUE_URL.format(ticker=yahoo_ticker), timeout=30)
+            break
+        except requests.HTTPError as exc:
+            last_http_error = exc
+            if exc.response is not None and exc.response.status_code in (404, 429):
+                continue
+            raise
+        except requests.RequestException as exc:
+            last_request_error = exc
+            continue
+
+    if html is None:
+        if last_http_error is not None and last_http_error.response is not None:
+            status_code = last_http_error.response.status_code
+            if status_code == 404:
+                print(f"[warn] yahoo revenue not found for {ticker} (tried: {', '.join(tried_symbols)})")
+                return []
+            if status_code == 429:
+                print(f"[warn] yahoo revenue rate limited for {ticker} (tried: {', '.join(tried_symbols)})")
+                return []
+        if last_request_error is not None:
+            print(
+                f"[warn] yahoo revenue request failed for {ticker} "
+                f"(tried: {', '.join(tried_symbols)}): {last_request_error}"
+            )
             return []
-        raise
-    except requests.RequestException as exc:
-        print(f"[warn] yahoo revenue request failed for {ticker}: {exc}")
         return []
+
     soup = BeautifulSoup(html, "lxml")
     section = soup.select_one("section#qsp-revenue-table")
     if section is None:
@@ -148,7 +174,6 @@ def run_yahoo_monthly_revenue_batch(tickers: Iterable[str]) -> int:
 
 if __name__ == "__main__":
     import sys
-    import twstock
 
     if len(sys.argv) < 2:
         target = "2330"
@@ -158,7 +183,11 @@ if __name__ == "__main__":
 
     target = sys.argv[1].strip().lower()
     if target == "all":
-        tickers = sorted([k for k in twstock.codes.keys() if k.isdigit()])
+        try:
+            twstock.__update_codes()
+        except Exception as exc:
+            print(f"[warn] update codes skipped: {exc}")
+        tickers = load_ticker_universe()
         inserted = run_yahoo_monthly_revenue_batch(tickers)
         print(f"inserted {inserted} rows for {len(tickers)} tickers")
     else:
