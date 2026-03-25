@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 from threading import Lock
 
 import random
 import requests
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 _QPS = float(os.getenv("ETL_QPS", "4"))
 _MIN_INTERVAL = 1.0 / _QPS if _QPS > 0 else 0.0
