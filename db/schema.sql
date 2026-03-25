@@ -13,6 +13,48 @@ CREATE TABLE IF NOT EXISTS companies (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS company_profiles (
+  id BIGSERIAL PRIMARY KEY,
+  ticker VARCHAR(10) NOT NULL,
+  yahoo_symbol VARCHAR(20),
+  company_name TEXT NOT NULL,
+  english_short_name TEXT,
+  market TEXT,
+  industry TEXT,
+  spokesperson TEXT,
+  acting_spokesperson TEXT,
+  chairman TEXT,
+  general_manager TEXT,
+  phone TEXT,
+  fax TEXT,
+  email TEXT,
+  website TEXT,
+  address TEXT,
+  stock_transfer_agent TEXT,
+  auditor TEXT,
+  group_name TEXT,
+  business_summary TEXT,
+  established_date DATE,
+  listed_date DATE,
+  share_capital NUMERIC(20, 2),
+  issued_common_shares BIGINT,
+  market_cap_million_twd NUMERIC(20, 4),
+  director_supervisor_holding_pct NUMERIC(8, 4),
+  data_date DATE NOT NULL,
+  source TEXT NOT NULL DEFAULT 'yahoo',
+  source_url TEXT,
+  raw_payload JSONB,
+  raw_hash TEXT,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (ticker, data_date, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_profiles_ticker
+  ON company_profiles (ticker);
+
+CREATE INDEX IF NOT EXISTS idx_company_profiles_ticker_data_date
+  ON company_profiles (ticker, data_date DESC);
+
 CREATE TABLE IF NOT EXISTS financials_quarterly (
   id SERIAL PRIMARY KEY,
   company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,

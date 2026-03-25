@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+psycopg://twstock:twstock@localhost:5432/twstock",
+    "postgresql+psycopg://twstock:twstock@localhost:5432/twstock_fundamentals",
 )
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
