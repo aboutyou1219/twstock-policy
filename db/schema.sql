@@ -55,6 +55,90 @@ CREATE INDEX IF NOT EXISTS idx_company_profiles_ticker
 CREATE INDEX IF NOT EXISTS idx_company_profiles_ticker_data_date
   ON company_profiles (ticker, data_date DESC);
 
+CREATE TABLE IF NOT EXISTS company_dividend_summaries (
+  id BIGSERIAL PRIMARY KEY,
+  ticker VARCHAR(10) NOT NULL,
+  dividend_year INTEGER,
+  cash_dividend NUMERIC(20, 4),
+  earnings_stock_dividend NUMERIC(20, 4),
+  capital_reserve_stock_dividend NUMERIC(20, 4),
+  stock_dividend NUMERIC(20, 4),
+  is_advance_notice BOOLEAN NOT NULL DEFAULT FALSE,
+  data_date DATE NOT NULL,
+  source TEXT NOT NULL DEFAULT 'yahoo',
+  source_url TEXT,
+  raw_payload JSONB,
+  raw_hash TEXT,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (ticker, data_date, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_dividend_summaries_ticker_data_date
+  ON company_dividend_summaries (ticker, data_date DESC);
+
+CREATE TABLE IF NOT EXISTS company_financial_highlights (
+  id BIGSERIAL PRIMARY KEY,
+  ticker VARCHAR(10) NOT NULL,
+  fiscal_year INTEGER NOT NULL,
+  fiscal_quarter INTEGER NOT NULL CHECK (fiscal_quarter BETWEEN 1 AND 4),
+  gross_margin NUMERIC(10, 4),
+  operating_margin NUMERIC(10, 4),
+  roa NUMERIC(10, 4),
+  roe NUMERIC(10, 4),
+  pretax_margin NUMERIC(10, 4),
+  book_value_per_share NUMERIC(20, 4),
+  data_date DATE NOT NULL,
+  source TEXT NOT NULL DEFAULT 'yahoo',
+  source_url TEXT,
+  raw_payload JSONB,
+  raw_hash TEXT,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (ticker, fiscal_year, fiscal_quarter, data_date, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_financial_highlights_ticker_period
+  ON company_financial_highlights (ticker, fiscal_year DESC, fiscal_quarter DESC, data_date DESC);
+
+CREATE TABLE IF NOT EXISTS company_financial_highlight_eps (
+  id BIGSERIAL PRIMARY KEY,
+  ticker VARCHAR(10) NOT NULL,
+  series_type TEXT NOT NULL CHECK (series_type IN ('quarterly_eps', 'annual_eps')),
+  period_label TEXT NOT NULL,
+  fiscal_year INTEGER NOT NULL,
+  fiscal_quarter INTEGER CHECK (fiscal_quarter BETWEEN 1 AND 4),
+  eps NUMERIC(20, 4),
+  display_order INTEGER NOT NULL DEFAULT 0,
+  data_date DATE NOT NULL,
+  source TEXT NOT NULL DEFAULT 'yahoo',
+  source_url TEXT,
+  raw_hash TEXT,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (ticker, series_type, period_label, data_date, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_financial_highlight_eps_ticker_series
+  ON company_financial_highlight_eps (ticker, series_type, display_order, data_date DESC);
+
+CREATE TABLE IF NOT EXISTS company_calendar_events (
+  id BIGSERIAL PRIMARY KEY,
+  ticker VARCHAR(10) NOT NULL,
+  section_key TEXT NOT NULL,
+  event_name TEXT NOT NULL,
+  event_date DATE,
+  event_end_date DATE,
+  event_value_text TEXT,
+  data_date DATE NOT NULL,
+  source TEXT NOT NULL DEFAULT 'yahoo',
+  source_url TEXT,
+  raw_payload JSONB,
+  raw_hash TEXT,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (ticker, section_key, event_name, data_date, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_calendar_events_ticker_data_date
+  ON company_calendar_events (ticker, data_date DESC, section_key);
+
 CREATE TABLE IF NOT EXISTS financials_quarterly (
   id SERIAL PRIMARY KEY,
   company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
