@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from sqlalchemy import ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -154,4 +154,113 @@ class CashFlowQuarter(Base):
     free_cash_flow: Mapped[float | None]
     net_cash_flow: Mapped[float | None]
     source: Mapped[str]
+    fetched_at: Mapped[datetime]
+
+
+class CompanyProfile(Base):
+    __tablename__ = "company_profiles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(index=True)
+    yahoo_symbol: Mapped[str | None]
+    company_name: Mapped[str]
+    english_short_name: Mapped[str | None]
+    market: Mapped[str | None]
+    industry: Mapped[str | None]
+    spokesperson: Mapped[str | None]
+    acting_spokesperson: Mapped[str | None]
+    chairman: Mapped[str | None]
+    general_manager: Mapped[str | None]
+    phone: Mapped[str | None]
+    fax: Mapped[str | None]
+    email: Mapped[str | None]
+    website: Mapped[str | None]
+    address: Mapped[str | None]
+    stock_transfer_agent: Mapped[str | None]
+    auditor: Mapped[str | None]
+    group_name: Mapped[str | None]
+    business_summary: Mapped[str | None]
+    established_date: Mapped[date | None]
+    listed_date: Mapped[date | None]
+    share_capital: Mapped[float | None]
+    issued_common_shares: Mapped[int | None]
+    market_cap_million_twd: Mapped[float | None]
+    director_supervisor_holding_pct: Mapped[float | None]
+    data_date: Mapped[date]
+    source: Mapped[str]
+    source_url: Mapped[str | None]
+    raw_hash: Mapped[str | None]
+    fetched_at: Mapped[datetime]
+
+
+class CompanyDividendSummary(Base):
+    __tablename__ = "company_dividend_summaries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(index=True)
+    dividend_year: Mapped[int | None]
+    cash_dividend: Mapped[float | None]
+    earnings_stock_dividend: Mapped[float | None]
+    capital_reserve_stock_dividend: Mapped[float | None]
+    stock_dividend: Mapped[float | None]
+    is_advance_notice: Mapped[bool]
+    data_date: Mapped[date]
+    source: Mapped[str]
+    source_url: Mapped[str | None]
+    raw_hash: Mapped[str | None]
+    fetched_at: Mapped[datetime]
+
+
+class CompanyFinancialHighlight(Base):
+    __tablename__ = "company_financial_highlights"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(index=True)
+    fiscal_year: Mapped[int]
+    fiscal_quarter: Mapped[int]
+    gross_margin: Mapped[float | None]
+    operating_margin: Mapped[float | None]
+    roa: Mapped[float | None]
+    roe: Mapped[float | None]
+    pretax_margin: Mapped[float | None]
+    book_value_per_share: Mapped[float | None]
+    data_date: Mapped[date]
+    source: Mapped[str]
+    source_url: Mapped[str | None]
+    raw_hash: Mapped[str | None]
+    fetched_at: Mapped[datetime]
+
+
+class CompanyFinancialHighlightEps(Base):
+    __tablename__ = "company_financial_highlight_eps"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(index=True)
+    series_type: Mapped[str]
+    period_label: Mapped[str]
+    fiscal_year: Mapped[int]
+    fiscal_quarter: Mapped[int | None]
+    eps: Mapped[float | None]
+    display_order: Mapped[int]
+    data_date: Mapped[date]
+    source: Mapped[str]
+    source_url: Mapped[str | None]
+    raw_hash: Mapped[str | None]
+    fetched_at: Mapped[datetime]
+
+
+class CompanyCalendarEvent(Base):
+    __tablename__ = "company_calendar_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(index=True)
+    section_key: Mapped[str]
+    event_name: Mapped[str]
+    event_date: Mapped[date | None]
+    event_end_date: Mapped[date | None]
+    event_value_text: Mapped[str | None]
+    data_date: Mapped[date]
+    source: Mapped[str]
+    source_url: Mapped[str | None]
+    raw_hash: Mapped[str | None]
     fetched_at: Mapped[datetime]
