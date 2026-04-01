@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -38,6 +40,10 @@ class ScreeningRequest(BaseModel):
     upcoming_ex_dividend_within_days: int | None = None
     max_share_capital: float | None = None
     industry: str | None = None
+    period_mode: Literal["latest_available", "fixed_period"] = "latest_available"
+    target_fiscal_year: int | None = None
+    target_fiscal_quarter: int | None = None
+    stale_policy: Literal["exclude_stale", "include_stale_with_flag"] = "exclude_stale"
 
 
 class ScreenMetricOut(BaseModel):
@@ -54,6 +60,9 @@ class ScreenMetricOut(BaseModel):
     book_value_per_share: float | None = None
     cash_dividend: float | None = None
     upcoming_ex_dividend_date: date | None = None
+    gross_margin_period: str | None = None
+    roe_period: str | None = None
+    eps_period: str | None = None
 
 
 class ScreenItemOut(BaseModel):
@@ -64,6 +73,8 @@ class ScreenItemOut(BaseModel):
     group_name: str | None = None
     latest_month: date | None = None
     latest_quarter: str | None = None
+    resolved_period: str | None = None
+    is_stale: bool = False
     metrics: ScreenMetricOut
 
 

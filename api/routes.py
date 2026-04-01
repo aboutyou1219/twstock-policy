@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import and_, func, select
+from sqlalchemy import String, and_, case, cast, func, literal, or_, select
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.exc import SQLAlchemyError
 import twstock
@@ -37,6 +37,99 @@ from .schemas import (
 )
 
 router = APIRouter()
+
+
+def _quarter_label_expr(year_col, quarter_col, compact: bool = True):
+    separator = "Q" if compact else " Q"
+    return cast(year_col, String) + literal(separator) + cast(quarter_col, String)
+
+
+def _period_metric_subquery(
+    model,
+    value_labels: dict[str, str],
+    period_mode: str,
+    target_fiscal_year: int | None,
+    target_fiscal_quarter: int | None,
+    stale_policy: str,
+    has_data_date: bool = False,
+):
+    base_cols = [
+        model.ticker.label("ticker"),
+        model.fiscal_year.label("fiscal_year"),
+        model.fiscal_quarter.label("fiscal_quarter"),
+        model.fetched_at.label("fetched_at"),
+        _quarter_label_expr(model.fiscal_year, model.fiscal_quarter).label("metric_period"),
+    ]
+    if has_data_date:
+        base_cols.append(model.data_date.label("data_date"))
+    else:
+        base_cols.append(literal(None).label("data_date"))
+
+    value_cols = [getattr(model, source).label(dest) for source, dest in value_labels.items()]
+
+    latest_candidates = (
+        select(
+            *base_cols,
+            *value_cols,
+            literal(False).label("is_stale"),
+            literal(0).label("priority"),
+        )
+        .subquery()
+    )
+
+    if period_mode == "latest_available":
+        candidates = latest_candidates
+    else:
+        exact_candidates = (
+            select(
+                *base_cols,
+                *value_cols,
+                literal(False).label("is_stale"),
+                literal(0).label("priority"),
+            )
+            .where(
+                model.fiscal_year == target_fiscal_year,
+                model.fiscal_quarter == target_fiscal_quarter,
+            )
+            .subquery()
+        )
+        if stale_policy == "include_stale_with_flag":
+            stale_latest_candidates = (
+                select(
+                    *base_cols,
+                    *value_cols,
+                    literal(True).label("is_stale"),
+                    literal(1).label("priority"),
+                )
+                .subquery()
+            )
+            candidates = select(exact_candidates).union_all(select(stale_latest_candidates)).subquery()
+        else:
+            candidates = exact_candidates
+
+    return (
+        select(
+            candidates.c.ticker,
+            candidates.c.fiscal_year,
+            candidates.c.fiscal_quarter,
+            candidates.c.metric_period,
+            candidates.c.is_stale,
+            *[candidates.c[label] for label in value_labels.values()],
+            func.row_number()
+            .over(
+                partition_by=candidates.c.ticker,
+                order_by=(
+                    candidates.c.priority.asc(),
+                    candidates.c.fiscal_year.desc(),
+                    candidates.c.fiscal_quarter.desc(),
+                    candidates.c.data_date.desc().nullslast(),
+                    candidates.c.fetched_at.desc(),
+                ),
+            )
+            .label("rn"),
+        )
+        .subquery()
+    )
 
 
 def _latest_profile_subquery():
@@ -80,26 +173,28 @@ def screen_companies(
     offset: int = 0,
 ) -> ScreenResponseOut:
     try:
-        profile_subq = _latest_profile_subquery()
-        highlight_subq = (
-            select(
-                CompanyFinancialHighlight.ticker.label("ticker"),
-                CompanyFinancialHighlight.roe.label("roe"),
-                CompanyFinancialHighlight.roa.label("roa"),
-                CompanyFinancialHighlight.book_value_per_share.label("book_value_per_share"),
-                func.row_number()
-                .over(
-                    partition_by=CompanyFinancialHighlight.ticker,
-                    order_by=(
-                        CompanyFinancialHighlight.data_date.desc(),
-                        CompanyFinancialHighlight.fiscal_year.desc(),
-                        CompanyFinancialHighlight.fiscal_quarter.desc(),
-                        CompanyFinancialHighlight.fetched_at.desc(),
-                    ),
+        if req.period_mode == "fixed_period":
+            if req.target_fiscal_year is None or req.target_fiscal_quarter is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="target_fiscal_year and target_fiscal_quarter are required when period_mode=fixed_period",
                 )
-                .label("rn"),
-            )
-            .subquery()
+            if req.target_fiscal_quarter not in {1, 2, 3, 4}:
+                raise HTTPException(status_code=422, detail="target_fiscal_quarter must be between 1 and 4")
+
+        profile_subq = _latest_profile_subquery()
+        highlight_subq = _period_metric_subquery(
+            CompanyFinancialHighlight,
+            {
+                "roe": "roe",
+                "roa": "roa",
+                "book_value_per_share": "book_value_per_share",
+            },
+            req.period_mode,
+            req.target_fiscal_year,
+            req.target_fiscal_quarter,
+            req.stale_policy,
+            has_data_date=True,
         )
 
         dividend_subq = (
@@ -130,26 +225,17 @@ def screen_companies(
             .subquery()
         )
 
-        latest_income_subq = (
-            select(
-                IncomeStatementQuarter.ticker.label("ticker"),
-                IncomeStatementQuarter.fiscal_year.label("fiscal_year"),
-                IncomeStatementQuarter.fiscal_quarter.label("fiscal_quarter"),
-                IncomeStatementQuarter.revenue.label("revenue"),
-                IncomeStatementQuarter.gross_profit.label("gross_profit"),
-                IncomeStatementQuarter.operating_income.label("operating_income"),
-                IncomeStatementQuarter.source.label("source"),
-                func.row_number()
-                .over(
-                    partition_by=IncomeStatementQuarter.ticker,
-                    order_by=(
-                        IncomeStatementQuarter.fiscal_year.desc(),
-                        IncomeStatementQuarter.fiscal_quarter.desc(),
-                    ),
-                )
-                .label("rn"),
-            )
-            .subquery()
+        income_subq = _period_metric_subquery(
+            IncomeStatementQuarter,
+            {
+                "revenue": "revenue",
+                "gross_profit": "gross_profit",
+                "operating_income": "operating_income",
+            },
+            req.period_mode,
+            req.target_fiscal_year,
+            req.target_fiscal_quarter,
+            req.stale_policy,
         )
         prior_income = aliased(IncomeStatementQuarter)
 
@@ -168,27 +254,20 @@ def screen_companies(
             .subquery()
         )
 
-        eps_subq = (
-            select(
-                EpsQuarter.ticker.label("ticker"),
-                EpsQuarter.eps.label("eps"),
-                EpsQuarter.fiscal_year.label("fiscal_year"),
-                EpsQuarter.fiscal_quarter.label("fiscal_quarter"),
-                func.row_number()
-                .over(
-                    partition_by=EpsQuarter.ticker,
-                    order_by=(EpsQuarter.fiscal_year.desc(), EpsQuarter.fiscal_quarter.desc()),
-                )
-                .label("rn"),
-            )
-            .subquery()
+        eps_subq = _period_metric_subquery(
+            EpsQuarter,
+            {"eps": "eps"},
+            req.period_mode,
+            req.target_fiscal_year,
+            req.target_fiscal_quarter,
+            req.stale_policy,
         )
 
         gross_margin_expr = (
-            latest_income_subq.c.gross_profit * 100.0 / func.nullif(latest_income_subq.c.revenue, 0)
+            income_subq.c.gross_profit * 100.0 / func.nullif(income_subq.c.revenue, 0)
         ).label("gross_margin")
         operating_margin_expr = (
-            latest_income_subq.c.operating_income * 100.0 / func.nullif(latest_income_subq.c.revenue, 0)
+            income_subq.c.operating_income * 100.0 / func.nullif(income_subq.c.revenue, 0)
         ).label("operating_margin")
         prior_gross_margin_expr = (
             prior_income.gross_profit * 100.0 / func.nullif(prior_income.revenue, 0)
@@ -197,16 +276,39 @@ def screen_companies(
             gross_margin_expr - prior_gross_margin_expr
         ).label("gross_margin_yoy_delta")
         latest_quarter = (
-            func.concat(
-                latest_income_subq.c.fiscal_year,
-                " Q",
-                latest_income_subq.c.fiscal_quarter,
-            )
+            _quarter_label_expr(income_subq.c.fiscal_year, income_subq.c.fiscal_quarter, compact=False)
         ).label("latest_quarter")
+        resolved_period = (
+            case(
+                (
+                    and_(
+                        income_subq.c.metric_period == eps_subq.c.metric_period,
+                        income_subq.c.metric_period == highlight_subq.c.metric_period,
+                    ),
+                    income_subq.c.metric_period,
+                ),
+                else_=None,
+            )
+        ).label("resolved_period")
+        is_stale_expr = (
+            case(
+                (
+                    or_(
+                        income_subq.c.is_stale.is_(True),
+                        eps_subq.c.is_stale.is_(True),
+                        highlight_subq.c.is_stale.is_(True),
+                    ),
+                    True,
+                ),
+                else_=False,
+            )
+        ).label("is_stale")
+
+        use_strict_metric_joins = req.period_mode == "fixed_period"
 
         query = (
             select(
-                latest_income_subq.c.ticker,
+                income_subq.c.ticker,
                 profile_subq.c.company_name,
                 profile_subq.c.market,
                 profile_subq.c.group_name,
@@ -222,45 +324,58 @@ def screen_companies(
                 highlight_subq.c.roe,
                 highlight_subq.c.roa,
                 highlight_subq.c.book_value_per_share,
+                income_subq.c.metric_period.label("gross_margin_period"),
+                highlight_subq.c.metric_period.label("roe_period"),
+                eps_subq.c.metric_period.label("eps_period"),
+                resolved_period,
+                is_stale_expr,
                 dividend_subq.c.cash_dividend,
                 ex_dividend_subq.c.upcoming_ex_dividend_date,
                 latest_quarter,
             )
-            .select_from(latest_income_subq)
+            .select_from(income_subq)
             .outerjoin(
                 prior_income,
                 and_(
-                    prior_income.ticker == latest_income_subq.c.ticker,
-                    prior_income.fiscal_year == latest_income_subq.c.fiscal_year - 1,
-                    prior_income.fiscal_quarter == latest_income_subq.c.fiscal_quarter,
+                    prior_income.ticker == income_subq.c.ticker,
+                    prior_income.fiscal_year == income_subq.c.fiscal_year - 1,
+                    prior_income.fiscal_quarter == income_subq.c.fiscal_quarter,
                 ),
             )
             .outerjoin(
                 revenue_subq,
-                (revenue_subq.c.ticker == latest_income_subq.c.ticker) & (revenue_subq.c.rn == 1),
-            )
-            .outerjoin(
-                eps_subq,
-                (eps_subq.c.ticker == latest_income_subq.c.ticker) & (eps_subq.c.rn == 1),
+                (revenue_subq.c.ticker == income_subq.c.ticker) & (revenue_subq.c.rn == 1),
             )
             .outerjoin(
                 profile_subq,
-                (profile_subq.c.ticker == latest_income_subq.c.ticker) & (profile_subq.c.rn == 1),
-            )
-            .outerjoin(
-                highlight_subq,
-                (highlight_subq.c.ticker == latest_income_subq.c.ticker) & (highlight_subq.c.rn == 1),
+                (profile_subq.c.ticker == income_subq.c.ticker) & (profile_subq.c.rn == 1),
             )
             .outerjoin(
                 dividend_subq,
-                (dividend_subq.c.ticker == latest_income_subq.c.ticker) & (dividend_subq.c.rn == 1),
+                (dividend_subq.c.ticker == income_subq.c.ticker) & (dividend_subq.c.rn == 1),
             )
             .outerjoin(
                 ex_dividend_subq,
-                ex_dividend_subq.c.ticker == latest_income_subq.c.ticker,
+                ex_dividend_subq.c.ticker == income_subq.c.ticker,
             )
-            .where(latest_income_subq.c.rn == 1)
+            .where(income_subq.c.rn == 1)
         )
+        if use_strict_metric_joins:
+            query = query.join(
+                eps_subq,
+                (eps_subq.c.ticker == income_subq.c.ticker) & (eps_subq.c.rn == 1),
+            ).join(
+                highlight_subq,
+                (highlight_subq.c.ticker == income_subq.c.ticker) & (highlight_subq.c.rn == 1),
+            )
+        else:
+            query = query.outerjoin(
+                eps_subq,
+                (eps_subq.c.ticker == income_subq.c.ticker) & (eps_subq.c.rn == 1),
+            ).outerjoin(
+                highlight_subq,
+                (highlight_subq.c.ticker == income_subq.c.ticker) & (highlight_subq.c.rn == 1),
+            )
 
         if req.min_gross_margin is not None:
             query = query.where(gross_margin_expr >= req.min_gross_margin)
@@ -348,11 +463,16 @@ def screen_companies(
                         "cash_dividend": row.cash_dividend,
                         "market_cap_million_twd": row.market_cap_million_twd,
                         "upcoming_ex_dividend_date": row.upcoming_ex_dividend_date,
+                        "gross_margin_period": row.gross_margin_period,
+                        "roe_period": row.roe_period,
+                        "eps_period": row.eps_period,
                         "roi": None,
                         "share_capital_billion": (
                             (float(row.share_capital) / 100000000) if row.share_capital is not None else None
                         ),
                     },
+                    "resolved_period": row.resolved_period,
+                    "is_stale": row.is_stale,
                 }
             )
         return {

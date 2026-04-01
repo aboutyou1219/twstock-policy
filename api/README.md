@@ -43,12 +43,16 @@ Request Body (JSON)：
   "min_roi": 5,
   "min_revenue_yoy": 10,
   "max_share_capital": 10,
-  "industry": "半導體業"
+  "industry": "半導體業",
+  "period_mode": "fixed_period",
+  "target_fiscal_year": 2025,
+  "target_fiscal_quarter": 4,
+  "stale_policy": "include_stale_with_flag"
 }
 ```
 
 Query Params：
-- `sort_by`: `gross_margin | roi | operating_margin | revenue_yoy | share_capital`，預設 `roi`
+- `sort_by`: `gross_margin | operating_margin | revenue_yoy | eps | gross_margin_yoy_delta | roe | roa | cash_dividend`，預設 `gross_margin`
 - `sort_dir`: `asc | desc`，預設 `desc`
 - `limit`: 預設 `50`
 - `offset`: 預設 `0`
@@ -65,16 +69,34 @@ Query Params：
       "ticker": "2330",
       "name": "台積電",
       "industry": "半導體業",
-      "gross_margin": 55.1,
-      "roi": 14.2,
-      "operating_margin": 42.3,
-      "revenue_yoy": 18.5,
-      "share_capital_billion": 259.3,
-      "latest_month": "2025-12-01"
+      "latest_month": "2025-12-01",
+      "latest_quarter": "2025 Q4",
+      "resolved_period": "2025Q4",
+      "is_stale": false,
+      "metrics": {
+        "gross_margin": 55.1,
+        "gross_margin_period": "2025Q4",
+        "roi": null,
+        "roe": 18.2,
+        "roe_period": "2025Q4",
+        "operating_margin": 42.3,
+        "eps": 14.2,
+        "eps_period": "2025Q4",
+        "revenue_yoy": 18.5,
+        "share_capital_billion": 259.3
+      }
     }
   ]
 }
 ```
+
+`period_mode`：
+- `latest_available`：每個指標使用該公司目前最新可用期別
+- `fixed_period`：優先使用指定 `target_fiscal_year` / `target_fiscal_quarter`
+
+`stale_policy`：
+- `exclude_stale`：指定期別缺資料就排除該股票
+- `include_stale_with_flag`：回退到最近可用期別，並以 `is_stale=true` 標記
 
 ## 個股全方位診斷
 
