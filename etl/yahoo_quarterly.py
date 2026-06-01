@@ -7,7 +7,7 @@ from typing import Iterable, Literal
 
 import requests
 from bs4 import BeautifulSoup
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -319,8 +319,12 @@ def upsert_yahoo_quarterly(db: Session, dataset: QuarterlyDataset, rows: Iterabl
                     for column in config.conflict_columns
                 ],
                 set_={
-                    column: row.get(column)
-                    for column in config.update_columns
+                    **{
+                        column: row.get(column)
+                        for column in config.update_columns
+                    },
+                    "source": row.get("source", "yahoo"),
+                    "fetched_at": func.now(),
                 },
             )
         )

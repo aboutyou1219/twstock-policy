@@ -7,6 +7,7 @@ from typing import Iterable
 import requests
 import twstock
 from bs4 import BeautifulSoup
+from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -138,6 +139,8 @@ def upsert_yahoo_monthly_revenue(db: Session, rows: Iterable[dict]) -> int:
                     "cum_revenue": row.get("cum_revenue"),
                     "cum_prev_year_revenue": row.get("cum_prev_year_revenue"),
                     "cum_yoy_pct": row.get("cum_yoy_pct"),
+                    "source": row.get("source", "yahoo"),
+                    "fetched_at": func.now(),
                 },
             )
         )
