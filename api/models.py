@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -90,6 +90,61 @@ class MonthlyRevenue(Base):
     cum_revenue: Mapped[float | None]
     cum_prev_year_revenue: Mapped[float | None]
     cum_yoy_pct: Mapped[float | None]
+    source: Mapped[str]
+    fetched_at: Mapped[datetime]
+
+
+class DailyPrice(Base):
+    __tablename__ = "daily_prices"
+    __table_args__ = (UniqueConstraint("ticker", "trade_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(index=True)
+    trade_date: Mapped[date] = mapped_column(index=True)
+    open_price: Mapped[float | None]
+    high_price: Mapped[float | None]
+    low_price: Mapped[float | None]
+    close_price: Mapped[float | None]
+    volume: Mapped[int | None]
+    turnover: Mapped[float | None]
+    transaction_count: Mapped[int | None]
+    price_change: Mapped[float | None]
+    market: Mapped[str | None]
+    source: Mapped[str]
+    raw_payload: Mapped[dict | None] = mapped_column(JSON)
+    fetched_at: Mapped[datetime]
+
+
+class DailyTechnicalIndicator(Base):
+    __tablename__ = "daily_technical_indicators"
+    __table_args__ = (UniqueConstraint("ticker", "trade_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(index=True)
+    trade_date: Mapped[date] = mapped_column(index=True)
+    ma5: Mapped[float | None]
+    ma10: Mapped[float | None]
+    ma20: Mapped[float | None]
+    ma60: Mapped[float | None]
+    ma120: Mapped[float | None]
+    ma240: Mapped[float | None]
+    volume_ma5: Mapped[float | None]
+    volume_ma20: Mapped[float | None]
+    rsi14: Mapped[float | None]
+    macd_dif: Mapped[float | None]
+    macd_dea: Mapped[float | None]
+    macd_hist: Mapped[float | None]
+    k9: Mapped[float | None]
+    d9: Mapped[float | None]
+    bb_mid: Mapped[float | None]
+    bb_upper: Mapped[float | None]
+    bb_lower: Mapped[float | None]
+    return_1d: Mapped[float | None]
+    return_5d: Mapped[float | None]
+    return_20d: Mapped[float | None]
+    return_60d: Mapped[float | None]
+    high_52w: Mapped[float | None]
+    low_52w: Mapped[float | None]
     source: Mapped[str]
     fetched_at: Mapped[datetime]
 

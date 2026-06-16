@@ -25,7 +25,7 @@ pip install -r requirement.txt
 建議使用 `twstock_fundamentals` 資料庫：
 
 ```bash
-export DATABASE_URL="postgresql+psycopg://twstock:twstock@localhost:5432/twstock_fundamentals"
+export DATABASE_URL="postgresql+psycopg://<db_user>:<db_password>@localhost:5432/twstock_fundamentals"
 ```
 
 建表：
@@ -153,7 +153,7 @@ python -m etl.yahoo_quarterly cash_flow --all-tickers --top5
 
 ```bash
 cd /home/victor/Documents/stock/twstock-policy
-export DATABASE_URL="postgresql+psycopg://twstock:twstock@localhost:5432/twstock_fundamentals"
+export DATABASE_URL="postgresql+psycopg://<db_user>:<db_password>@localhost:5432/twstock_fundamentals"
 export ETL_QPS=1
 
 /home/victor/Documents/stock/.twstock/bin/python -m etl.ticker_universe
@@ -189,6 +189,31 @@ python -m etl.yahoo_cash_flow 6829
 - `balance_sheet_quarterly`
 - `cash_flow_quarterly`
 
+## 每日收盤價與技術指標 ETL
+
+每日 OHLCV 目前使用 FinMind `TaiwanStockPrice`，寫入 `daily_prices`。技術指標由 `daily_prices` 派生，寫入 `daily_technical_indicators`。
+
+單一股票、指定日期區間：
+
+```bash
+python -m etl.daily_prices --ticker 2330 --from-date 2006-01-01 --to-date 2026-06-12
+python -m etl.technical_indicators --ticker 2330 --from-date 2006-01-01 --to-date 2026-06-12
+```
+
+全股票回補：
+
+```bash
+python -m etl.daily_prices_batch --all --from-date 2006-01-01 --to-date 2026-06-12 --commit-every 20
+python -m etl.technical_indicators --all --from-date 2006-01-01 --to-date 2026-06-12 --commit-every 20
+```
+
+日常更新建議抓最近交易窗口，避免假日、延遲與修正漏資料：
+
+```bash
+python -m etl.daily_prices_batch --all --latest
+python -m etl.technical_indicators --all --latest
+```
+
 ## 推薦使用流程
 
 1. 先跑單一 ticker，確認 parser 與 DB 寫入正常
@@ -196,7 +221,7 @@ python -m etl.yahoo_cash_flow 6829
 3. 最後跑批次 `--all`，做完整回補
 
 ```bash
-export DATABASE_URL="postgresql+psycopg://twstock:twstock@localhost:5432/twstock_fundamentals"
+export DATABASE_URL="postgresql+psycopg://<db_user>:<db_password>@localhost:5432/twstock_fundamentals"
 export ETL_QPS=1
 
 python -m etl.yahoo_revenue_batch --ticker 2337
@@ -233,7 +258,7 @@ python -m etl.yahoo_revenue_batch --all
 2. `--top5`：只比對每檔最新 5 筆，若與現有資料完全相同則跳過寫入
 
 ```bash
-export DATABASE_URL="postgresql+psycopg://twstock:twstock@localhost:5432/twstock_fundamentals"
+export DATABASE_URL="postgresql+psycopg://<db_user>:<db_password>@localhost:5432/twstock_fundamentals"
 export ETL_QPS=1
 
 python -m etl.yahoo_revenue_batch --ticker 2337
@@ -252,7 +277,7 @@ python -m etl.yahoo_revenue_batch --all --top5
 ## Yahoo EPS 批次命令（舊入口）
 
 ```bash
-export DATABASE_URL="postgresql+psycopg://twstock:twstock@localhost:5432/twstock_fundamentals"
+export DATABASE_URL="postgresql+psycopg://<db_user>:<db_password>@localhost:5432/twstock_fundamentals"
 export ETL_QPS=1
 
 python -m etl.yahoo_eps_batch --ticker 6829
@@ -267,7 +292,7 @@ python -m etl.yahoo_eps_batch --all --top5
 ## Yahoo 損益表批次命令（舊入口）
 
 ```bash
-export DATABASE_URL="postgresql+psycopg://twstock:twstock@localhost:5432/twstock_fundamentals"
+export DATABASE_URL="postgresql+psycopg://<db_user>:<db_password>@localhost:5432/twstock_fundamentals"
 export ETL_QPS=1
 
 python -m etl.yahoo_income_batch --ticker 6829
@@ -282,7 +307,7 @@ python -m etl.yahoo_income_batch --all --top5
 ## Yahoo 資產負債表批次命令（舊入口）
 
 ```bash
-export DATABASE_URL="postgresql+psycopg://twstock:twstock@localhost:5432/twstock_fundamentals"
+export DATABASE_URL="postgresql+psycopg://<db_user>:<db_password>@localhost:5432/twstock_fundamentals"
 export ETL_QPS=1
 
 python -m etl.yahoo_balance_batch --ticker 6829
@@ -297,7 +322,7 @@ python -m etl.yahoo_balance_batch --all --top5
 ## Yahoo 現金流量表批次命令（舊入口）
 
 ```bash
-export DATABASE_URL="postgresql+psycopg://twstock:twstock@localhost:5432/twstock_fundamentals"
+export DATABASE_URL="postgresql+psycopg://<db_user>:<db_password>@localhost:5432/twstock_fundamentals"
 export ETL_QPS=1
 
 python -m etl.yahoo_cash_flow_batch --ticker 6829
@@ -332,7 +357,7 @@ python -m etl.yahoo_cash_flow_batch --all --top5
 如果你要依 README 逐步驗證，建議先跑這組：
 
 ```bash
-export DATABASE_URL="postgresql+psycopg://twstock:twstock@localhost:5432/twstock_fundamentals"
+export DATABASE_URL="postgresql+psycopg://<db_user>:<db_password>@localhost:5432/twstock_fundamentals"
 export ETL_QPS=1
 
 python -m etl.ticker_universe

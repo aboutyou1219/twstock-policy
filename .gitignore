@@ -3,3 +3,11 @@ __pycache__/
 *.pyc
 .env
 .env.*
+.gstack/
+.codex
+.agents/
+product.md
+logs/
+web/node_modules/
+web/.next/
+web/tsconfig.tsbuildinfo

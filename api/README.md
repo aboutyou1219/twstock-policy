@@ -5,7 +5,7 @@
 ## 啟動
 
 ```bash
-export DATABASE_URL="postgresql+psycopg://twstock:twstock@localhost:5432/twstock_fundamentals"
+export DATABASE_URL="postgresql+psycopg://<db_user>:<db_password>@localhost:5432/twstock_fundamentals"
 /home/victor/Documents/stock/.twstock/bin/python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class MonthlyRevenueOut(BaseModel):
@@ -21,12 +21,115 @@ class MonthlyRevenueOut(BaseModel):
         from_attributes = True
 
 
+class DailyPriceOut(BaseModel):
+    ticker: str
+    trade_date: date
+    open_price: float | None = None
+    high_price: float | None = None
+    low_price: float | None = None
+    close_price: float | None = None
+    volume: int | None = None
+    turnover: float | None = None
+    transaction_count: int | None = None
+    price_change: float | None = None
+    market: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class DailyTechnicalIndicatorOut(BaseModel):
+    ticker: str
+    trade_date: date
+    ma5: float | None = None
+    ma10: float | None = None
+    ma20: float | None = None
+    ma60: float | None = None
+    ma120: float | None = None
+    ma240: float | None = None
+    volume_ma5: float | None = None
+    volume_ma20: float | None = None
+    rsi14: float | None = None
+    macd_dif: float | None = None
+    macd_dea: float | None = None
+    macd_hist: float | None = None
+    k9: float | None = None
+    d9: float | None = None
+    bb_mid: float | None = None
+    bb_upper: float | None = None
+    bb_lower: float | None = None
+    return_1d: float | None = None
+    return_5d: float | None = None
+    return_20d: float | None = None
+    return_60d: float | None = None
+    high_52w: float | None = None
+    low_52w: float | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class StockChartPointOut(BaseModel):
+    trade_date: date
+    open_price: float | None = None
+    high_price: float | None = None
+    low_price: float | None = None
+    close_price: float | None = None
+    volume: int | None = None
+    ma5: float | None = None
+    ma20: float | None = None
+    ma60: float | None = None
+    ma120: float | None = None
+    ma240: float | None = None
+    volume_ma20: float | None = None
+    rsi14: float | None = None
+    macd_dif: float | None = None
+    macd_dea: float | None = None
+    macd_hist: float | None = None
+    k9: float | None = None
+    d9: float | None = None
+    bb_upper: float | None = None
+    bb_lower: float | None = None
+    return_20d: float | None = None
+    high_52w: float | None = None
+    low_52w: float | None = None
+
+
+class StockChartResponseOut(BaseModel):
+    ticker: str
+    count: int
+    from_date: date | None = None
+    to_date: date | None = None
+    latest_trade_date: date | None = None
+    points: list[StockChartPointOut]
+
+
+class StockOverviewOut(BaseModel):
+    ticker: str
+    name: str
+    market: str | None = None
+    industry: str | None = None
+    latest_trade_date: date | None = None
+    close_price: float | None = None
+    price_change: float | None = None
+    volume: int | None = None
+    ma20: float | None = None
+    ma60: float | None = None
+    volume_ma20: float | None = None
+    rsi14: float | None = None
+    macd_hist: float | None = None
+
+
 class ScreeningRequest(BaseModel):
+    screen_mode: Literal["strict_intersection", "old_cb2_compatible"] = "strict_intersection"
+    min_matched_condition_count: int | None = None
     min_gross_margin: float | None = None
     min_operating_margin: float | None = None
+    min_operating_margin_yoy_delta: float | None = None
     min_roi: float | None = None
     min_revenue_yoy: float | None = None
     min_eps: float | None = None
+    min_ttm_eps: float | None = None
     min_gross_margin_yoy_delta: float | None = None
     min_roe: float | None = None
     min_roa: float | None = None
@@ -45,12 +148,20 @@ class ScreeningRequest(BaseModel):
     target_fiscal_quarter: int | None = None
     stale_policy: Literal["exclude_stale", "include_stale_with_flag"] = "exclude_stale"
 
+    @field_validator("stale_policy", mode="before")
+    @classmethod
+    def default_stale_policy(cls, value):
+        return "exclude_stale" if value is None else value
+
 
 class ScreenMetricOut(BaseModel):
     gross_margin: float | None = None
     operating_margin: float | None = None
+    operating_margin_yoy_delta: float | None = None
     roi: float | None = None
+    ttm_roe: float | None = None
     eps: float | None = None
+    ttm_eps: float | None = None
     revenue_yoy: float | None = None
     share_capital_billion: float | None = None
     market_cap_million_twd: float | None = None
@@ -71,6 +182,8 @@ class ScreenItemOut(BaseModel):
     market: str | None = None
     industry: str | None = None
     group_name: str | None = None
+    matched_condition_count: int = 0
+    matched_conditions: list[str] = []
     latest_month: date | None = None
     latest_quarter: str | None = None
     resolved_period: str | None = None

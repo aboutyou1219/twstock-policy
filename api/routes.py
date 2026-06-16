@@ -17,6 +17,8 @@ from .models import (
     CompanyFinancialHighlight,
     CompanyFinancialHighlightEps,
     CompanyProfile,
+    DailyPrice,
+    DailyTechnicalIndicator,
     EpsQuarter,
     FinancialQuarter,
     IncomeStatementQuarter,
@@ -30,10 +32,14 @@ from .schemas import (
     CompanyFinancialHighlightsOut,
     CompanyFinancialHighlightEpsOut,
     CompanyProfileOut,
+    DailyPriceOut,
+    DailyTechnicalIndicatorOut,
     MonthlyRevenueOut,
     ScreenMetadataOut,
     ScreenResponseOut,
     ScreeningRequest,
+    StockChartResponseOut,
+    StockOverviewOut,
 )
 
 router = APIRouter()
@@ -153,6 +159,52 @@ def _latest_profile_subquery():
     )
 
 
+def _validate_date_range(from_date: date | None, to_date: date | None) -> None:
+    if from_date is not None and to_date is not None and from_date > to_date:
+        raise HTTPException(status_code=422, detail="from_date must be before or equal to to_date")
+
+
+def _stock_identity(db: Session, ticker: str) -> dict:
+    profile = db.execute(
+        select(CompanyProfile)
+        .where(CompanyProfile.ticker == ticker)
+        .order_by(CompanyProfile.data_date.desc(), CompanyProfile.fetched_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    company = db.execute(select(Company).where(Company.ticker == ticker)).scalar_one_or_none()
+    info = twstock.codes.get(ticker)
+    return {
+        "ticker": ticker,
+        "name": (
+            profile.company_name
+            if profile is not None
+            else company.name
+            if company is not None
+            else info.name
+            if info is not None
+            else ticker
+        ),
+        "market": (
+            profile.market
+            if profile is not None
+            else company.market
+            if company is not None
+            else info.market
+            if info is not None
+            else None
+        ),
+        "industry": (
+            profile.industry
+            if profile is not None
+            else company.industry
+            if company is not None
+            else info.group
+            if info is not None
+            else None
+        ),
+    }
+
+
 @router.get("/monthly-revenue/{ticker}", response_model=list[MonthlyRevenueOut])
 def monthly_revenue(ticker: str, db: Session = Depends(get_db)):
     rows = db.execute(
@@ -161,6 +213,148 @@ def monthly_revenue(ticker: str, db: Session = Depends(get_db)):
         .order_by(MonthlyRevenue.period.desc())
     ).scalars().all()
     return rows
+
+
+@router.get("/v1/stocks/{ticker}/overview", response_model=StockOverviewOut)
+def stock_overview(ticker: str, db: Session = Depends(get_db)):
+    try:
+        identity = _stock_identity(db, ticker)
+        row = (
+            db.execute(
+                select(DailyPrice, DailyTechnicalIndicator)
+                .outerjoin(
+                    DailyTechnicalIndicator,
+                    (DailyTechnicalIndicator.ticker == DailyPrice.ticker)
+                    & (DailyTechnicalIndicator.trade_date == DailyPrice.trade_date),
+                )
+                .where(DailyPrice.ticker == ticker)
+                .order_by(DailyPrice.trade_date.desc())
+                .limit(1)
+            )
+            .first()
+        )
+        if row is None:
+            return StockOverviewOut(**identity)
+
+        price, indicators = row
+        return {
+            **identity,
+            "latest_trade_date": price.trade_date,
+            "close_price": price.close_price,
+            "price_change": price.price_change,
+            "volume": price.volume,
+            "ma20": indicators.ma20 if indicators is not None else None,
+            "ma60": indicators.ma60 if indicators is not None else None,
+            "volume_ma20": indicators.volume_ma20 if indicators is not None else None,
+            "rsi14": indicators.rsi14 if indicators is not None else None,
+            "macd_hist": indicators.macd_hist if indicators is not None else None,
+        }
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database error")
+
+
+@router.get("/v1/stocks/{ticker}/prices", response_model=list[DailyPriceOut])
+def stock_prices(
+    ticker: str,
+    from_date: date | None = None,
+    to_date: date | None = None,
+    db: Session = Depends(get_db),
+):
+    _validate_date_range(from_date, to_date)
+    try:
+        query = select(DailyPrice).where(DailyPrice.ticker == ticker)
+        if from_date is not None:
+            query = query.where(DailyPrice.trade_date >= from_date)
+        if to_date is not None:
+            query = query.where(DailyPrice.trade_date <= to_date)
+        return db.execute(query.order_by(DailyPrice.trade_date.asc())).scalars().all()
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database error")
+
+
+@router.get("/v1/stocks/{ticker}/technical-indicators", response_model=list[DailyTechnicalIndicatorOut])
+def stock_technical_indicators(
+    ticker: str,
+    from_date: date | None = None,
+    to_date: date | None = None,
+    db: Session = Depends(get_db),
+):
+    _validate_date_range(from_date, to_date)
+    try:
+        query = select(DailyTechnicalIndicator).where(DailyTechnicalIndicator.ticker == ticker)
+        if from_date is not None:
+            query = query.where(DailyTechnicalIndicator.trade_date >= from_date)
+        if to_date is not None:
+            query = query.where(DailyTechnicalIndicator.trade_date <= to_date)
+        return db.execute(query.order_by(DailyTechnicalIndicator.trade_date.asc())).scalars().all()
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database error")
+
+
+@router.get("/v1/stocks/{ticker}/chart", response_model=StockChartResponseOut)
+def stock_chart(
+    ticker: str,
+    from_date: date | None = None,
+    to_date: date | None = None,
+    db: Session = Depends(get_db),
+):
+    _validate_date_range(from_date, to_date)
+    try:
+        query = (
+            select(DailyPrice, DailyTechnicalIndicator)
+            .outerjoin(
+                DailyTechnicalIndicator,
+                (DailyTechnicalIndicator.ticker == DailyPrice.ticker)
+                & (DailyTechnicalIndicator.trade_date == DailyPrice.trade_date),
+            )
+            .where(DailyPrice.ticker == ticker)
+        )
+        if from_date is not None:
+            query = query.where(DailyPrice.trade_date >= from_date)
+        if to_date is not None:
+            query = query.where(DailyPrice.trade_date <= to_date)
+
+        rows = db.execute(query.order_by(DailyPrice.trade_date.asc())).all()
+        points = []
+        for price, indicators in rows:
+            points.append(
+                {
+                    "trade_date": price.trade_date,
+                    "open_price": price.open_price,
+                    "high_price": price.high_price,
+                    "low_price": price.low_price,
+                    "close_price": price.close_price,
+                    "volume": price.volume,
+                    "ma5": indicators.ma5 if indicators is not None else None,
+                    "ma20": indicators.ma20 if indicators is not None else None,
+                    "ma60": indicators.ma60 if indicators is not None else None,
+                    "ma120": indicators.ma120 if indicators is not None else None,
+                    "ma240": indicators.ma240 if indicators is not None else None,
+                    "volume_ma20": indicators.volume_ma20 if indicators is not None else None,
+                    "rsi14": indicators.rsi14 if indicators is not None else None,
+                    "macd_dif": indicators.macd_dif if indicators is not None else None,
+                    "macd_dea": indicators.macd_dea if indicators is not None else None,
+                    "macd_hist": indicators.macd_hist if indicators is not None else None,
+                    "k9": indicators.k9 if indicators is not None else None,
+                    "d9": indicators.d9 if indicators is not None else None,
+                    "bb_upper": indicators.bb_upper if indicators is not None else None,
+                    "bb_lower": indicators.bb_lower if indicators is not None else None,
+                    "return_20d": indicators.return_20d if indicators is not None else None,
+                    "high_52w": indicators.high_52w if indicators is not None else None,
+                    "low_52w": indicators.low_52w if indicators is not None else None,
+                }
+            )
+
+        return {
+            "ticker": ticker,
+            "count": len(points),
+            "from_date": points[0]["trade_date"] if points else from_date,
+            "to_date": points[-1]["trade_date"] if points else to_date,
+            "latest_trade_date": points[-1]["trade_date"] if points else None,
+            "points": points,
+        }
+    except SQLAlchemyError:
+        raise HTTPException(status_code=500, detail="Database error")
 
 
 @router.post("/v1/stocks/screen")
@@ -262,6 +456,28 @@ def screen_companies(
             req.target_fiscal_quarter,
             req.stale_policy,
         )
+        eps_ranked_subq = (
+            select(
+                EpsQuarter.ticker.label("ticker"),
+                EpsQuarter.eps.label("eps"),
+                func.row_number()
+                .over(
+                    partition_by=EpsQuarter.ticker,
+                    order_by=(EpsQuarter.fiscal_year.desc(), EpsQuarter.fiscal_quarter.desc()),
+                )
+                .label("rn"),
+            )
+            .subquery()
+        )
+        ttm_eps_subq = (
+            select(
+                eps_ranked_subq.c.ticker.label("ticker"),
+                func.sum(eps_ranked_subq.c.eps).label("ttm_eps"),
+            )
+            .where(eps_ranked_subq.c.rn <= 4)
+            .group_by(eps_ranked_subq.c.ticker)
+            .subquery()
+        )
 
         gross_margin_expr = (
             income_subq.c.gross_profit * 100.0 / func.nullif(income_subq.c.revenue, 0)
@@ -272,9 +488,18 @@ def screen_companies(
         prior_gross_margin_expr = (
             prior_income.gross_profit * 100.0 / func.nullif(prior_income.revenue, 0)
         )
+        prior_operating_margin_expr = (
+            prior_income.operating_income * 100.0 / func.nullif(prior_income.revenue, 0)
+        )
         gross_margin_yoy_delta = (
             gross_margin_expr - prior_gross_margin_expr
         ).label("gross_margin_yoy_delta")
+        operating_margin_yoy_delta = (
+            operating_margin_expr - prior_operating_margin_expr
+        ).label("operating_margin_yoy_delta")
+        ttm_roe_expr = (
+            ttm_eps_subq.c.ttm_eps * 100.0 / func.nullif(highlight_subq.c.book_value_per_share, 0)
+        ).label("ttm_roe")
         latest_quarter = (
             _quarter_label_expr(income_subq.c.fiscal_year, income_subq.c.fiscal_quarter, compact=False)
         ).label("latest_quarter")
@@ -320,7 +545,10 @@ def screen_companies(
                 revenue_subq.c.month_yoy_pct,
                 revenue_subq.c.period.label("latest_month"),
                 eps_subq.c.eps,
+                ttm_eps_subq.c.ttm_eps,
+                ttm_roe_expr,
                 gross_margin_yoy_delta,
+                operating_margin_yoy_delta,
                 highlight_subq.c.roe,
                 highlight_subq.c.roa,
                 highlight_subq.c.book_value_per_share,
@@ -358,6 +586,10 @@ def screen_companies(
                 ex_dividend_subq,
                 ex_dividend_subq.c.ticker == income_subq.c.ticker,
             )
+            .outerjoin(
+                ttm_eps_subq,
+                ttm_eps_subq.c.ticker == income_subq.c.ticker,
+            )
             .where(income_subq.c.rn == 1)
         )
         if use_strict_metric_joins:
@@ -377,52 +609,85 @@ def screen_companies(
                 (highlight_subq.c.ticker == income_subq.c.ticker) & (highlight_subq.c.rn == 1),
             )
 
-        if req.min_gross_margin is not None:
-            query = query.where(gross_margin_expr >= req.min_gross_margin)
-        if req.min_operating_margin is not None:
-            query = query.where(operating_margin_expr >= req.min_operating_margin)
-        if req.min_revenue_yoy is not None:
-            query = query.where(revenue_subq.c.month_yoy_pct >= req.min_revenue_yoy)
-        if req.min_eps is not None:
-            query = query.where(eps_subq.c.eps >= req.min_eps)
-        if req.min_gross_margin_yoy_delta is not None:
-            query = query.where(gross_margin_yoy_delta >= req.min_gross_margin_yoy_delta)
-        if req.min_roe is not None:
-            query = query.where(highlight_subq.c.roe >= req.min_roe)
-        if req.min_roa is not None:
-            query = query.where(highlight_subq.c.roa >= req.min_roa)
-        if req.min_book_value_per_share is not None:
-            query = query.where(highlight_subq.c.book_value_per_share >= req.min_book_value_per_share)
-        if req.min_cash_dividend is not None:
-            query = query.where(dividend_subq.c.cash_dividend >= req.min_cash_dividend)
-        if req.market is not None:
-            query = query.where(profile_subq.c.market == req.market)
         effective_share_capital_max = (
             req.share_capital_max if req.share_capital_max is not None else req.max_share_capital
         )
-        if req.share_capital_min is not None:
-            query = query.where(profile_subq.c.share_capital >= req.share_capital_min * 100000000)
-        if effective_share_capital_max is not None:
-            query = query.where(profile_subq.c.share_capital <= effective_share_capital_max * 100000000)
-        if req.market_cap_min is not None:
-            query = query.where(profile_subq.c.market_cap_million_twd >= req.market_cap_min)
-        if req.market_cap_max is not None:
-            query = query.where(profile_subq.c.market_cap_million_twd <= req.market_cap_max)
+        old_conditions = [
+            gross_margin_expr >= (req.min_gross_margin if req.min_gross_margin is not None else 30),
+            ttm_roe_expr >= (req.min_roe if req.min_roe is not None else 15),
+            ttm_eps_subq.c.ttm_eps > (req.min_ttm_eps if req.min_ttm_eps is not None else 5),
+            profile_subq.c.share_capital
+            <= (effective_share_capital_max if effective_share_capital_max is not None else 20)
+            * 100000000,
+            operating_margin_expr >= (
+                req.min_operating_margin if req.min_operating_margin is not None else 15
+            ),
+            operating_margin_yoy_delta >= (
+                req.min_operating_margin_yoy_delta
+                if req.min_operating_margin_yoy_delta is not None
+                else 5
+            ),
+            gross_margin_yoy_delta >= (
+                req.min_gross_margin_yoy_delta if req.min_gross_margin_yoy_delta is not None else 5
+            ),
+        ]
+        old_matched_count_expr = sum(case((condition, 1), else_=0) for condition in old_conditions)
+        if req.screen_mode == "old_cb2_compatible":
+            query = query.where(or_(*old_conditions))
+            if req.min_matched_condition_count is not None:
+                query = query.where(old_matched_count_expr >= req.min_matched_condition_count)
+        else:
+            if req.min_gross_margin is not None:
+                query = query.where(gross_margin_expr >= req.min_gross_margin)
+            if req.min_operating_margin is not None:
+                query = query.where(operating_margin_expr >= req.min_operating_margin)
+            if req.min_operating_margin_yoy_delta is not None:
+                query = query.where(operating_margin_yoy_delta >= req.min_operating_margin_yoy_delta)
+            if req.min_revenue_yoy is not None:
+                query = query.where(revenue_subq.c.month_yoy_pct >= req.min_revenue_yoy)
+            if req.min_eps is not None:
+                query = query.where(eps_subq.c.eps >= req.min_eps)
+            if req.min_ttm_eps is not None:
+                query = query.where(ttm_eps_subq.c.ttm_eps > req.min_ttm_eps)
+            if req.min_gross_margin_yoy_delta is not None:
+                query = query.where(gross_margin_yoy_delta >= req.min_gross_margin_yoy_delta)
+            if req.min_roe is not None:
+                query = query.where(highlight_subq.c.roe >= req.min_roe)
+            if req.min_roa is not None:
+                query = query.where(highlight_subq.c.roa >= req.min_roa)
+            if req.min_book_value_per_share is not None:
+                query = query.where(highlight_subq.c.book_value_per_share >= req.min_book_value_per_share)
+            if req.min_cash_dividend is not None:
+                query = query.where(dividend_subq.c.cash_dividend >= req.min_cash_dividend)
+            if req.share_capital_min is not None:
+                query = query.where(profile_subq.c.share_capital >= req.share_capital_min * 100000000)
+            if effective_share_capital_max is not None:
+                query = query.where(profile_subq.c.share_capital <= effective_share_capital_max * 100000000)
+            if req.market_cap_min is not None:
+                query = query.where(profile_subq.c.market_cap_million_twd >= req.market_cap_min)
+            if req.market_cap_max is not None:
+                query = query.where(profile_subq.c.market_cap_million_twd <= req.market_cap_max)
+            if req.upcoming_ex_dividend_within_days is not None:
+                query = query.where(
+                    ex_dividend_subq.c.upcoming_ex_dividend_date.is_not(None),
+                    ex_dividend_subq.c.upcoming_ex_dividend_date
+                    <= (func.current_date() + req.upcoming_ex_dividend_within_days),
+                )
+        if req.market is not None:
+            query = query.where(profile_subq.c.market == req.market)
         if req.industry is not None:
             query = query.where(profile_subq.c.industry == req.industry)
-        if req.upcoming_ex_dividend_within_days is not None:
-            query = query.where(
-                ex_dividend_subq.c.upcoming_ex_dividend_date.is_not(None),
-                ex_dividend_subq.c.upcoming_ex_dividend_date
-                <= (func.current_date() + req.upcoming_ex_dividend_within_days),
-            )
+
+        total = db.execute(select(func.count()).select_from(query.subquery())).scalar_one()
 
         sort_map = {
             "gross_margin": gross_margin_expr,
             "operating_margin": operating_margin_expr,
             "revenue_yoy": revenue_subq.c.month_yoy_pct,
             "eps": eps_subq.c.eps,
+            "ttm_eps": ttm_eps_subq.c.ttm_eps,
             "gross_margin_yoy_delta": gross_margin_yoy_delta,
+            "operating_margin_yoy_delta": operating_margin_yoy_delta,
             "roe": highlight_subq.c.roe,
             "roa": highlight_subq.c.roa,
             "cash_dividend": dividend_subq.c.cash_dividend,
@@ -442,6 +707,42 @@ def screen_companies(
                 getattr(row, "profile_industry", None)
                 or (info.group if info is not None and getattr(info, "group", None) else None)
             )
+            share_capital_billion = (
+                (float(row.share_capital) / 100000000) if row.share_capital is not None else None
+            )
+            matched_conditions = []
+            if row.gross_margin is not None and row.gross_margin >= (
+                req.min_gross_margin if req.min_gross_margin is not None else 30
+            ):
+                matched_conditions.append("毛利率 >= 30%")
+            if row.ttm_roe is not None and row.ttm_roe >= (
+                req.min_roe if req.min_roe is not None else 15
+            ):
+                matched_conditions.append("近四季 ROE >= 15%")
+            if row.ttm_eps is not None and row.ttm_eps > (
+                req.min_ttm_eps if req.min_ttm_eps is not None else 5
+            ):
+                matched_conditions.append("近四季合計 EPS > 5")
+            if (
+                share_capital_billion is not None
+                and share_capital_billion
+                <= (effective_share_capital_max if effective_share_capital_max is not None else 20)
+            ):
+                matched_conditions.append("股本 <= 20 億")
+            if row.operating_margin is not None and row.operating_margin >= (
+                req.min_operating_margin if req.min_operating_margin is not None else 15
+            ):
+                matched_conditions.append("營益率 >= 15%")
+            if row.operating_margin_yoy_delta is not None and row.operating_margin_yoy_delta >= (
+                req.min_operating_margin_yoy_delta
+                if req.min_operating_margin_yoy_delta is not None
+                else 5
+            ):
+                matched_conditions.append("營益率年增 >= 5 百分點")
+            if row.gross_margin_yoy_delta is not None and row.gross_margin_yoy_delta >= (
+                req.min_gross_margin_yoy_delta if req.min_gross_margin_yoy_delta is not None else 5
+            ):
+                matched_conditions.append("毛利率年增 >= 5 百分點")
             results.append(
                 {
                     "ticker": row.ticker,
@@ -449,14 +750,19 @@ def screen_companies(
                     "market": getattr(row, "market", None) or (info.market if info is not None else None),
                     "industry": industry,
                     "group_name": getattr(row, "group_name", None),
+                    "matched_condition_count": len(matched_conditions),
+                    "matched_conditions": matched_conditions,
                     "latest_month": row.latest_month,
                     "latest_quarter": row.latest_quarter,
                     "metrics": {
                         "gross_margin": row.gross_margin,
                         "operating_margin": row.operating_margin,
+                        "ttm_roe": row.ttm_roe,
                         "revenue_yoy": row.month_yoy_pct,
                         "eps": row.eps,
+                        "ttm_eps": row.ttm_eps,
                         "gross_margin_yoy_delta": row.gross_margin_yoy_delta,
+                        "operating_margin_yoy_delta": row.operating_margin_yoy_delta,
                         "roe": row.roe,
                         "roa": row.roa,
                         "book_value_per_share": row.book_value_per_share,
@@ -467,9 +773,7 @@ def screen_companies(
                         "roe_period": row.roe_period,
                         "eps_period": row.eps_period,
                         "roi": None,
-                        "share_capital_billion": (
-                            (float(row.share_capital) / 100000000) if row.share_capital is not None else None
-                        ),
+                        "share_capital_billion": share_capital_billion,
                     },
                     "resolved_period": row.resolved_period,
                     "is_stale": row.is_stale,
@@ -477,7 +781,7 @@ def screen_companies(
             )
         return {
             "count": len(results),
-            "total": len(results),
+            "total": total,
             "limit": limit,
             "offset": offset,
             "items": results,

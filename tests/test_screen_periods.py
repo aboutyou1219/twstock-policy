@@ -178,6 +178,16 @@ class ScreenPeriodsTest(unittest.TestCase):
         self.assertIn("is_stale", first)
         self.assertFalse(first["is_stale"])
 
+    def test_latest_available_accepts_null_stale_policy_from_legacy_clients(self):
+        response = self.client.post(
+            "/api/v1/stocks/screen",
+            json={"period_mode": "latest_available", "stale_policy": None},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+
+        self.assertGreater(payload["count"], 0)
+
     def test_latest_available_preserves_existing_metric_filters(self):
         response = self.client.post(
             "/api/v1/stocks/screen",
